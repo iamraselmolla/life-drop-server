@@ -1,6 +1,5 @@
 import express from "express";
 import cors from "cors";
-import pool from "./db/db.js";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -12,7 +11,19 @@ app.use(cors());
 app.use(express.json());
 
 app.get("/", (req, res) => {
-  res.send("Hello World!");
+  res.json({
+    status: 200,
+    success: true,
+    message: "Welcome to the LifeDrop API",
+  });
+});
+
+app.use((req, res) => {
+  res.status(404).json({
+    status: 404,
+    success: false,
+    message: "Endpoint not found",
+  });
 });
 app.listen(PORT, () => {
   console.log(`Server has started on port ${PORT}`);
