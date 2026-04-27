@@ -1,10 +1,17 @@
-const registerUser = async (req, res) => {
+import sendResponse from "../../utils/sendResponse.js";
+import AuthServices from "./auth.services.js";
+
+const registerUser = async (req, res, next) => {
   try {
-    const { name, email, password } = req.body;
-    const user = await User.create({ name, email, password });
-    res.status(201).json({ user });
+    const result = await AuthServices.registerUser(req.body)();
+    sendResponse(res, {
+      statusCode: 201,
+      success: true,
+      message: "User registered successfully",
+      data: result,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    next(error);
   }
 };
 
