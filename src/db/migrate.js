@@ -27,6 +27,7 @@ const migrate = async () => {
       name VARCHAR(255) NOT NULL,
       age INTEGER cHECK (age >= 16 AND age <= 100),
       disease VARCHAR(255),
+      district VARCHAR(255),
       division VARCHAR(255),
       avatar_url VARCHAR(255),
       created_at TIMESTAMPTZ DEFAULT NOW(),

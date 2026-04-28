@@ -4,4 +4,4 @@ const router = express.Router();
 
 router.post("/register", AuthController.registerUser);
 
-export default AuthRouter;
+export default router;
