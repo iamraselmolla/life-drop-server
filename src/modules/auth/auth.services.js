@@ -1,29 +1,40 @@
+/**
+ * auth.service.js
+ *
+ * All database work for authentication lives here.
+ * Controllers stay thin — they just call these functions.
+ *
+ * REGISTRATION FLOW (single atomic transaction):
+ *   1. Hash password
+ *   2. INSERT → users          (email, phone, password_hash)
+ *   3. INSERT → profiles       (name, age, district, division, user_id)
+ *   4. INSERT → donor_medical  (blood_group, weight, flags…, profile_id)
+ *   5. COMMIT  — or ROLLBACK if anything fails
+ */
+
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import pool from "../../db/pool.js";
-import http from "http-status";
 
-const SALT_ROUNDS = 10;
-const JWT_SECRET = process.env.JWT_SECRET
-  ? process.env.JWT_SECRET
-  : "iamraselmollasecretjwttoken";
+const SALT_ROUNDS = 12;
+const JWT_SECRET = process.env.JWT_SECRET || "change-this-secret-in-production";
+const JWT_EXPIRES = process.env.JWT_EXPIRES || "30d";
 
-const JWT_EXPIRES_IN = "365d";
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const jwtSign = (payload) => {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
-};
+function signToken(payload) {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
+}
 
-const jwtVerify = (token) => {
-  return jwt.verify(token, JWT_SECRET);
-};
+/** Strip password_hash before sending user data to client */
+function safeUser(user) {
+  const { password, ...rest } = user;
+  return rest;
+}
 
-const safeUser = (user) => {
-  const { password, ...safeData } = user;
-  return safeData;
-};
+// ─── REGISTER ─────────────────────────────────────────────────────────────────
 
-const registerUser = (data) => async () => {
+export async function registerUser(data) {
   const {
     // Account
     email,
@@ -48,12 +59,15 @@ const registerUser = (data) => async () => {
     has_malaria_recent = false,
   } = data;
 
+  // ── 1. Hash password BEFORE opening DB transaction (CPU-bound, keep outside tx)
   const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
 
+  // ── 2. Open transaction — ALL inserts succeed or ALL roll back
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
+    // ── Step A: Create user account ──────────────────────────────────────────
     const userResult = await client.query(
       `INSERT INTO users (email, phone, password)
        VALUES ($1, $2, $3)
@@ -62,14 +76,22 @@ const registerUser = (data) => async () => {
     );
     const user = userResult.rows[0];
 
+    // ── Step B: Create profile ───────────────────────────────────────────────
     const profileResult = await client.query(
       `INSERT INTO profiles (user_id, name, age, division, disease)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id, name, age, division`,
-      [user.id, name.trim(), age, division?.trim() || null, null],
+      [
+        user.id,
+        name.trim(),
+        age,
+        division?.trim() || null,
+        null, // disease — not collected at registration
+      ],
     );
     const profile = profileResult.rows[0];
 
+    // ── Step C: Create donor medical record ──────────────────────────────────
     const medicalResult = await client.query(
       `INSERT INTO donor_medical (
          profile_id,
@@ -112,8 +134,10 @@ const registerUser = (data) => async () => {
     );
     const medical = medicalResult.rows[0];
 
+    // ── Commit — all three inserts succeeded ─────────────────────────────────
     await client.query("COMMIT");
 
+    // ── 3. Issue JWT ─────────────────────────────────────────────────────────
     const token = signToken({
       userId: user.id,
       profileId: profile.id,
@@ -131,7 +155,7 @@ const registerUser = (data) => async () => {
           id: profile.id,
           name: profile.name,
           age: profile.age,
-          district,
+          district, // kept from input (not in profiles table yet — add column if needed)
           division: profile.division,
           medical: {
             id: medical.id,
@@ -154,33 +178,131 @@ const registerUser = (data) => async () => {
   } catch (err) {
     await client.query("ROLLBACK");
 
+    // Detect duplicate email or phone (Postgres unique violation = code 23505)
     if (err.code === "23505") {
       if (err.constraint?.includes("email")) {
         throw {
-          status: http.CONFLICT,
+          status: 409,
           message: "An account with this email already exists.",
         };
       }
       if (err.constraint?.includes("phone")) {
         throw {
-          status: http.CONFLICT,
+          status: 409,
           message: "An account with this phone number already exists.",
         };
       }
     }
 
+    // Re-throw everything else as a 500
     throw {
-      status: http.SERVICE_UNAVAILABLE,
+      status: 500,
       message: "Registration failed. Please try again.",
       detail: err.message,
     };
   } finally {
-    client.release();
+    client.release(); // always return connection to pool
   }
-};
+}
 
-const AuthServices = {
-  registerUser,
-};
+// ─── LOGIN ────────────────────────────────────────────────────────────────────
 
-export default AuthServices;
+export async function loginUser({ email, password }) {
+  // Fetch user + profile + medical in one JOIN query
+  const result = await pool.query(
+    `SELECT
+       u.id          AS user_id,
+       u.email,
+       u.phone,
+       u.password,
+       u.created_at,
+       p.id          AS profile_id,
+       p.name,
+       p.age,
+       p.division,
+       p.avatar_url,
+       dm.blood_group,
+       dm.weight,
+       dm.last_donation,
+       dm.is_smoker,
+       dm.hepatitis_b,
+       dm.hepatitis_c,
+       dm.hiv,
+       dm.is_diabetic,
+       dm.heart_disease,
+       dm.malaria
+     FROM users u
+     LEFT JOIN profiles     p  ON p.user_id    = u.id
+     LEFT JOIN donor_medical dm ON dm.profile_id = p.id
+     WHERE u.email = $1
+     LIMIT 1`,
+    [email.toLowerCase().trim()],
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    throw { status: 401, message: "Invalid email or password." };
+  }
+
+  const valid = await bcrypt.compare(password, row.password);
+  if (!valid) {
+    throw { status: 401, message: "Invalid email or password." };
+  }
+
+  const token = signToken({
+    userId: row.user_id,
+    profileId: row.profile_id,
+    email: row.email,
+  });
+
+  return {
+    token,
+    user: {
+      id: row.user_id,
+      email: row.email,
+      phone: row.phone,
+      profile: {
+        id: row.profile_id,
+        name: row.name,
+        age: row.age,
+        division: row.division,
+        avatar_url: row.avatar_url,
+        medical: {
+          blood_group: row.blood_group,
+          weight: row.weight,
+          last_donation: row.last_donation,
+          flags: {
+            is_smoker: row.is_smoker,
+            hepatitis_b: row.hepatitis_b,
+            hepatitis_c: row.hepatitis_c,
+            hiv: row.hiv,
+            is_diabetic: row.is_diabetic,
+            heart_disease: row.heart_disease,
+            malaria: row.malaria,
+          },
+        },
+      },
+    },
+  };
+}
+
+// ─── GET MY PROFILE ───────────────────────────────────────────────────────────
+
+export async function getMyProfile(userId) {
+  const result = await pool.query(
+    `SELECT
+       u.id, u.email, u.phone, u.created_at,
+       p.id AS profile_id, p.name, p.age, p.division, p.disease, p.avatar_url,
+       dm.blood_group, dm.weight, dm.last_donation,
+       dm.is_smoker, dm.hepatitis_b, dm.hepatitis_c,
+       dm.hiv, dm.is_diabetic, dm.heart_disease, dm.malaria
+     FROM users u
+     LEFT JOIN profiles      p  ON p.user_id    = u.id
+     LEFT JOIN donor_medical dm ON dm.profile_id = p.id
+     WHERE u.id = $1`,
+    [userId],
+  );
+
+  if (!result.rows[0]) throw { status: 404, message: "User not found." };
+  return result.rows[0];
+}
