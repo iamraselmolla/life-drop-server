@@ -1,52 +1,47 @@
-// ─── controllers/auth.controller.js ──────────────────────────────────────────
-// Thin layer: validate → call service → send response.
-// No SQL here. No business logic here.
-
 import * as AuthService from "./auth.services.js";
+import sendResponse from "../../utils/sendResponse.js";
 
 // POST /api/auth/register
-export async function register(req, res) {
+export async function register(req, res, next) {
   try {
     const result = await AuthService.registerUser(req.body);
-    return res.status(201).json({
+
+    sendResponse(res, {
+      statusCode: 201,
       success: true,
-      message: "Registration successful. Welcome to LifeDrop!",
-      ...result, // { token, user }
+      message: "Registration successful.",
+      data: result,
     });
   } catch (err) {
-    return res.status(err.status || 500).json({
-      success: false,
-      message: err.message || "Internal server error.",
-    });
+    next(err);
   }
 }
 
 // POST /api/auth/login
-export async function login(req, res) {
+export async function login(req, res, next) {
   try {
     const result = await AuthService.loginUser(req.body);
-    return res.status(200).json({
+    sendResponse(res, {
+      status: 200,
       success: true,
       message: "Login successful.",
-      ...result, // { token, user }
+      user: result,
     });
   } catch (err) {
-    return res.status(err.status || 500).json({
-      success: false,
-      message: err.message || "Internal server error.",
-    });
+    next(err);
   }
 }
 
 // GET /api/auth/me  (protected)
-export async function getMe(req, res) {
+export async function getMe(req, res, next) {
   try {
     const profile = await AuthService.getMyProfile(req.user.userId);
-    return res.status(200).json({ success: true, user: profile });
-  } catch (err) {
-    return res.status(err.status || 500).json({
-      success: false,
-      message: err.message || "Internal server error.",
+    sendResponse(res, {
+      status: 200,
+      success: true,
+      user: profile,
     });
+  } catch (err) {
+    next(err);
   }
 }

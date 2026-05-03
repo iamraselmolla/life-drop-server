@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import router from "./routes/index.js";
+import globalErrorHandler from "./utils/error-handler/globalErrorHandler.js";
 
 dotenv.config();
 
@@ -27,6 +28,7 @@ app.use((req, res) => {
     message: "Endpoint not found",
   });
 });
+app.use(globalErrorHandler);
 app.listen(PORT, () => {
   console.log(`Server has started on port ${PORT}`);
 });

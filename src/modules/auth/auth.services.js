@@ -66,6 +66,17 @@ export async function registerUser(data) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const findExisting = await client.query(
+      `SELECT id FROM users WHERE email = $1 OR phone = $2 LIMIT 1`,
+      [email.toLowerCase().trim(), phone.trim()],
+    );
+
+    if (findExisting.rows[0]) {
+      throw {
+        status: 409,
+        message: "An account with this email or phone number already exists.",
+      };
+    }
 
     // ── Step A: Create user account ──────────────────────────────────────────
     const userResult = await client.query(
@@ -142,8 +153,9 @@ export async function registerUser(data) {
       userId: user.id,
       profileId: profile.id,
       email: user.email,
+      phone: user.phone,
+      blood_group: medical.blood_group,
     });
-
     return {
       token,
       user: {
