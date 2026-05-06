@@ -86,7 +86,6 @@ const migrate = async () => {
       );
     `);
     await client.query(`COMMIT`);
-    console.log("Migration completed successfully.");
   } catch (err) {
     await client.query(`ROLLBACK`);
     console.error("Migration failed:", err);
