@@ -72,10 +72,9 @@ export async function registerUser(data) {
     );
 
     if (findExisting.rows[0]) {
-      throw {
-        status: 409,
-        message: "An account with this email or phone number already exists.",
-      };
+      throw new Error(
+        "An account with this email or phone number already exists.",
+      );
     }
 
     // ── Step A: Create user account ──────────────────────────────────────────
@@ -209,8 +208,8 @@ export async function registerUser(data) {
     // Re-throw everything else as a 500
     throw {
       status: 500,
-      message: "Registration failed. Please try again.",
-      detail: err.message,
+      success: false,
+      message: err.message,
     };
   } finally {
     client.release(); // always return connection to pool

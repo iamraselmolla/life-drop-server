@@ -5,7 +5,6 @@ import sendResponse from "../../utils/sendResponse.js";
 export async function register(req, res, next) {
   try {
     const result = await AuthService.registerUser(req.body);
-
     sendResponse(res, {
       statusCode: 201,
       success: true,
@@ -13,6 +12,7 @@ export async function register(req, res, next) {
       data: result,
     });
   } catch (err) {
+    console.error("Registration error:", err);
     next(err);
   }
 }
